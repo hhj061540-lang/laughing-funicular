@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const yaml = require('js-yaml');
 const { exec, spawn, execSync } = require('child_process');
 const simpleGit = require('simple-git');
 
@@ -40,6 +41,7 @@ const CODESPACES_FILE = path.join(DATA_DIR, 'codespaces.json');
 const ISSUES_FILE = path.join(DATA_DIR, 'issues.json');
 const AUTH_CODES_FILE = path.join(DATA_DIR, 'auth-codes.json');
 const RELEASES_FILE = path.join(DATA_DIR, 'releases.json');
+const PIPELINES_FILE = path.join(DATA_DIR, 'pipelines.json');
 const RELEASE_ASSETS_DIR = path.join(DATA_DIR, 'release-assets');
 
 fs.mkdirSync(REPO_ROOT, { recursive: true });
@@ -54,6 +56,7 @@ if (!fs.existsSync(CODESPACES_FILE)) fs.writeFileSync(CODESPACES_FILE, '[]');
 if (!fs.existsSync(ISSUES_FILE)) fs.writeFileSync(ISSUES_FILE, '[]');
 if (!fs.existsSync(AUTH_CODES_FILE)) fs.writeFileSync(AUTH_CODES_FILE, '[]');
 if (!fs.existsSync(RELEASES_FILE)) fs.writeFileSync(RELEASES_FILE, '[]');
+if (!fs.existsSync(PIPELINES_FILE)) fs.writeFileSync(PIPELINES_FILE, '[]');
 
 let OAUTH_SECRET;
 if (fs.existsSync(SECRET_FILE)) {
@@ -107,6 +110,9 @@ function generateCodeChallenge(codeVerifier, method = 'S256') {
     return codeVerifier;
 }
 function generateCodeVerifier() { return randomHex(32); }
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 function getGitBackendPath() {
     const paths = [
@@ -176,9 +182,9 @@ pre{background:#000;padding:10px;border:1px solid #333;overflow-x:auto;color:#ff
 <a href="/codespaces/menu">💻 Codespaces</a>
 <a href="/issues/menu">📝 Issues</a>
 <a href="/releases/menu">📦 Releases</a>
+<a href="/pipelines/menu">⚙️ Pipelines</a>
 <a href="/api/oauth/apps">🔐 OAuth Apps</a>
 <a href="/api/list-repos">📁 Repositories</a>
-<a href="/api/auth/login">🔑 Login</a>
 </div>
 <p>Port: ${PORT}</p>
 <div class="grid">
@@ -243,12 +249,14 @@ input,textarea,button{background:#2b2b2b;color:#fff;border:1px solid #444;paddin
 button{cursor:pointer;background:#0088cc;font-weight:bold;}
 button:hover{background:#00aaff;}
 pre{background:#000;padding:10px;border:1px solid #333;overflow-x:auto;color:#fff;}
+.desc{color:#888;font-size:13px;margin:6px 0;}
 </style></head><body>
 <div class="menu">
 <a href="/dashboard">🏠 Home</a>
 <a href="/codespaces/menu">💻 Codespaces</a>
 <a href="/issues/menu">📝 Issues</a>
 <a href="/releases/menu">📦 Releases</a>
+<a href="/pipelines/menu">⚙️ Pipelines</a>
 </div>
 <h1>${title}</h1>${bodyHtml}<script>${scripts}</script></body></html>`;
 }
@@ -328,11 +336,72 @@ document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)
 document.getElementById('cr').addEventListener('submit',create);
 document.getElementById('uf').addEventListener('submit',upload);list();`)));
 
+// ============ ⭐ NEW: PIPELINES MENU ============
+app.get('/pipelines/menu', (req, res) => res.send(menuPage('⚙️ Pipelines', `
+<h2>Register Pipeline</h2>
+<div class="desc">Attach a description to a YAML file in a repo so others know what it does.</div>
+<form id="rf">
+  <input id="repoName" placeholder="Repository Name" required>
+  <input id="pipelineFile" placeholder="Pipeline File (e.g., build.yml)" required>
+  <input id="pipelineName" placeholder="Pipeline Name (optional)">
+  <textarea id="description" rows="3" placeholder="Description — what does this pipeline do?"></textarea>
+  <input id="token" placeholder="Bearer Token" required>
+  <button type="submit">Register Pipeline</button>
+</form>
+
+<h2>List Pipelines</h2>
+<button onclick="listAll()">Refresh</button>
+<pre id="out"></pre>
+
+<h2>Inspect Pipeline</h2>
+<div class="desc">Parse a YAML file in a repo and show its description, commands, and step count — without executing it.</div>
+<form id="if">
+  <input id="iRepo" placeholder="Repository Name" required>
+  <input id="iFile" placeholder="Pipeline File" required>
+  <input id="iToken" placeholder="Bearer Token" required>
+  <button type="submit">Inspect</button>
+</form>
+<pre id="inspectOut"></pre>`, `
+async function register(e){
+  e.preventDefault();
+  const body = {
+    repoName: document.getElementById('repoName').value,
+    pipelineFile: document.getElementById('pipelineFile').value,
+    pipelineName: document.getElementById('pipelineName').value,
+    description: document.getElementById('description').value
+  };
+  const r = await fetch('/api/pipelines/register', {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+document.getElementById('token').value,'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  alert(JSON.stringify(await r.json(), null, 2));
+  listAll();
+}
+async function listAll(){
+  const t = prompt('Bearer Token:');
+  const r = await fetch('/api/pipelines/list', { headers:{'Authorization':'Bearer '+t} });
+  document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+}
+async function inspect(e){
+  e.preventDefault();
+  const t = document.getElementById('iToken').value;
+  const repo = document.getElementById('iRepo').value;
+  const file = document.getElementById('iFile').value;
+  const r = await fetch('/api/pipelines/info?repoName='+encodeURIComponent(repo)+'&pipelineFile='+encodeURIComponent(file), {
+    headers:{'Authorization':'Bearer '+t}
+  });
+  document.getElementById('inspectOut').textContent = JSON.stringify(await r.json(), null, 2);
+}
+document.getElementById('rf').addEventListener('submit', register);
+document.getElementById('if').addEventListener('submit', inspect);`)));
+
 // ============ REPOSITORIES ============
 app.post('/create-repo', authenticateJWT, async (req, res) => {
     try {
         const { repoName } = req.body;
         if (!repoName) return res.status(400).send('repoName required');
+        if (repoName.includes('..')) return res.status(400).send('Invalid repoName');
         const repoPath = path.join(REPO_ROOT, repoName);
         const host = req.get('host');
         if (fs.existsSync(repoPath)) return res.send(`<pre>⚠️ Repository already exists.</pre><a href="/dashboard">Back</a>`);
@@ -427,23 +496,315 @@ app.get('/logs', authenticateJWT, async (req, res) => {
     } catch (err) { res.status(500).send(`Error: ${err.message}`); }
 });
 
+// ============ ⭐ YAML-AWARE PIPELINE RUNNER (with description) ============
+//
+// Supported YAML schemas (all compatible with a top-level `description:`):
+//
+//   1. Flat list:
+//        description: Build & deploy the app
+//        stages:
+//          - echo "building"
+//          - npm install
+//
+//   2. Named stages with steps:
+//        description: Full CI pipeline
+//        stages:
+//          - name: build
+//            steps:
+//              - echo "building"
+//              - npm install
+//
+//   3. Top-level steps:
+//        description: Simple
+//        steps:
+//          - echo "hi"
+//
+//   4. Plain list of strings (no wrapper key, no description):
+//        - echo "hi"
+//        - echo "bye"
+//
+//   5. Object-form commands with run:
+//        description: Object form
+//        stages:
+//          - name: build
+//            steps:
+//              - run: echo "hi"
+//
+// Also supports optional metadata: name, version, author, env.
+
+function extractCommands(parsed) {
+    const commands = [];
+
+    const push = (cmd) => {
+        if (typeof cmd === 'string' && cmd.trim()) commands.push(cmd.trim());
+        else if (cmd && typeof cmd === 'object' && typeof cmd.run === 'string') commands.push(cmd.run.trim());
+    };
+
+    if (Array.isArray(parsed)) {
+        parsed.forEach(push);
+        return commands;
+    }
+
+    if (!parsed || typeof parsed !== 'object') return commands;
+
+    if (Array.isArray(parsed.steps)) parsed.steps.forEach(push);
+
+    if (Array.isArray(parsed.stages)) {
+        for (const stage of parsed.stages) {
+            if (typeof stage === 'string') push(stage);
+            else if (stage && typeof stage === 'object') {
+                if (Array.isArray(stage.steps)) stage.steps.forEach(push);
+                else if (typeof stage.run === 'string') push(stage.run);
+            }
+        }
+    }
+
+    return commands;
+}
+
+// Extract optional metadata (description, name, version, author) from parsed YAML
+function extractMetadata(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { description: null, name: null, version: null, author: null };
+    }
+    return {
+        description: typeof parsed.description === 'string' ? parsed.description : null,
+        name: typeof parsed.name === 'string' ? parsed.name : null,
+        version: typeof parsed.version === 'string' ? parsed.version : null,
+        author: typeof parsed.author === 'string' ? parsed.author : null
+    };
+}
+
 app.post('/run-pipeline', authenticateJWT, (req, res) => {
     const { repoName, pipelineFile } = req.body;
+
+    if (!repoName || !pipelineFile) {
+        return res.status(400).send('repoName and pipelineFile required');
+    }
+    if (repoName.includes('..') || pipelineFile.includes('..') || path.isAbsolute(pipelineFile)) {
+        return res.status(400).send('Invalid path');
+    }
+
     const repoPath = path.join(REPO_ROOT, repoName);
-    const target = path.join(repoPath, pipelineFile);
+    if (!fs.existsSync(repoPath)) {
+        return res.status(404).send(`Repository '${repoName}' not found`);
+    }
+
+    const targetFile = path.join(repoPath, pipelineFile);
+    if (!fs.existsSync(targetFile)) {
+        return res.status(404).send(`Pipeline file '${pipelineFile}' does not exist`);
+    }
+
     const logFile = path.join(repoPath, 'pipeline-execution.log');
-    if (!fs.existsSync(target)) return res.status(404).send('Pipeline file not found');
-    exec(`cd "${repoPath}" && echo "Executing ${pipelineFile}..."`, (error, stdout, stderr) => {
-        const output = error ? `Error:\n${stderr}` : `Output:\n${stdout}`;
-        fs.appendFileSync(logFile, `\n--- [${new Date().toISOString()}] ---\n${output}`);
-        res.send(`<pre>${output}</pre><a href="/dashboard">Back</a>`);
-    });
+
+    // Parse YAML
+    let parsed, meta;
+    try {
+        const raw = fs.readFileSync(targetFile, 'utf8');
+        parsed = yaml.load(raw);
+        meta = extractMetadata(parsed);
+    } catch (err) {
+        const banner = `\n--- [${new Date().toISOString()}] PARSE ERROR: ${pipelineFile} ---\n`;
+        fs.appendFileSync(logFile, banner + err.message + '\n');
+        return res.status(400).send(`<pre>❌ YAML parse error:\n${escapeHtml(err.message)}</pre><a href="/dashboard">Back</a>`);
+    }
+
+    const commands = extractCommands(parsed);
+
+    if (commands.length === 0) {
+        return res.send(`<pre>No runnable commands found in ${pipelineFile}.
+${meta.description ? `Description: ${escapeHtml(meta.description)}\n` : ''}
+Expected one of:
+  description: ...
+  stages: [ 'echo hi', ... ]
+  stages: [ { name: build, steps: [ 'echo hi' ] } ]
+  steps:  [ 'echo hi' ]
+  - echo hi</pre><a href="/dashboard">Back</a>`);
+    }
+
+    // Run commands sequentially
+    const results = [];
+    let i = 0;
+
+    function runNext() {
+        if (i >= commands.length) {
+            const banner = `\n--- [${new Date().toISOString()}] Run: ${pipelineFile} (${commands.length} steps) ---\n` +
+                           (meta.description ? `Description: ${meta.description}\n` : '');
+            const logBody = results
+                .map(r => `$ ${r.cmd}\n${r.out}${r.ok ? '' : `[exit ${r.code}]`}`)
+                .join('\n');
+            try { fs.appendFileSync(logFile, banner + logBody + '\n'); } catch (e) { console.error('log write:', e); }
+
+            const html = results.map(r => {
+                const cls = r.ok ? '' : 'style="color:#ff6666"';
+                return `<div ${cls}>$ ${escapeHtml(r.cmd)}\n${escapeHtml(r.out)}${r.ok ? '' : `\n[exit ${r.code}]`}</div>`;
+            }).join('<hr>');
+
+            const descLine = meta.description
+                ? `<p style="color:#88ff88"><strong>Description:</strong> ${escapeHtml(meta.description)}</p>`
+                : '';
+
+            return res.send(`<h3>Pipeline: ${escapeHtml(pipelineFile)}</h3>${descLine}<pre>${html}</pre><a href="/dashboard">Back</a>`);
+        }
+
+        const cmd = commands[i++];
+        const started = Date.now();
+
+        exec(cmd, { cwd: repoPath, timeout: 30000, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
+            const combined = (stdout || '') + (stderr ? (stdout ? '\n' : '') + stderr : '');
+            results.push({
+                cmd,
+                out: combined || '(no output)',
+                ok: !error,
+                code: error ? error.code : 0,
+                ms: Date.now() - started
+            });
+            runNext();
+        });
+    }
+
+    runNext();
 });
 
 app.get('/pipeline-logs', authenticateJWT, (req, res) => {
     const logFile = path.join(REPO_ROOT, req.query.repoName, 'pipeline-execution.log');
     if (fs.existsSync(logFile)) res.type('text/plain').sendFile(logFile);
     else res.status(404).send('No logs');
+});
+
+// ============ ⭐ NEW: PIPELINE REGISTRY API ============
+
+// Register a pipeline (attach description + metadata)
+app.post('/api/pipelines/register', authenticateJWT, (req, res) => {
+    try {
+        const { repoName, pipelineFile, pipelineName, description } = req.body;
+        if (!repoName || !pipelineFile) {
+            return res.status(400).json({ error: 'repoName and pipelineFile required' });
+        }
+        if (repoName.includes('..') || pipelineFile.includes('..') || path.isAbsolute(pipelineFile)) {
+            return res.status(400).json({ error: 'invalid_path' });
+        }
+
+        const repoPath = path.join(REPO_ROOT, repoName);
+        if (!fs.existsSync(repoPath)) {
+            return res.status(404).json({ error: 'repository_not_found' });
+        }
+
+        const targetFile = path.join(repoPath, pipelineFile);
+        if (!fs.existsSync(targetFile)) {
+            return res.status(404).json({ error: 'pipeline_file_not_found' });
+        }
+
+        // Parse YAML to extract inline description if not provided
+        let inlineMeta = {};
+        try {
+            const parsed = yaml.load(fs.readFileSync(targetFile, 'utf8'));
+            inlineMeta = extractMetadata(parsed);
+        } catch (err) {
+            return res.status(400).json({ error: 'invalid_yaml', details: err.message });
+        }
+
+        const finalDescription = description || inlineMeta.description || '';
+        const finalName = pipelineName || inlineMeta.name || pipelineFile;
+
+        const pipelines = readJson(PIPELINES_FILE);
+        // Replace if already registered for this repo+file
+        const filtered = pipelines.filter(p => !(p.repoName === repoName && p.pipelineFile === pipelineFile));
+        const record = {
+            id: 'pipe_' + randomHex(8),
+            repoName,
+            pipelineFile,
+            pipelineName: finalName,
+            description: finalDescription,
+            version: inlineMeta.version || null,
+            author: inlineMeta.author || null,
+            registeredBy: req.user.username,
+            registeredAt: new Date().toISOString()
+        };
+        filtered.push(record);
+        writeJson(PIPELINES_FILE, filtered);
+
+        res.status(201).json({ status: 'success', pipeline: record });
+    } catch (err) {
+        console.error('pipelines/register error:', err);
+        res.status(500).json({ error: 'internal_error', details: err.message });
+    }
+});
+
+// List all registered pipelines (optionally filter by repo)
+app.get('/api/pipelines/list', authenticateJWT, (req, res) => {
+    let pipelines = readJson(PIPELINES_FILE);
+    if (req.query.repoName) pipelines = pipelines.filter(p => p.repoName === req.query.repoName);
+    res.json({ pipelines, count: pipelines.length });
+});
+
+// Inspect a YAML pipeline without running it
+app.get('/api/pipelines/info', authenticateJWT, (req, res) => {
+    try {
+        const { repoName, pipelineFile } = req.query;
+        if (!repoName || !pipelineFile) {
+            return res.status(400).json({ error: 'repoName and pipelineFile required' });
+        }
+        if (repoName.includes('..') || pipelineFile.includes('..') || path.isAbsolute(pipelineFile)) {
+            return res.status(400).json({ error: 'invalid_path' });
+        }
+
+        const repoPath = path.join(REPO_ROOT, repoName);
+        if (!fs.existsSync(repoPath)) {
+            return res.status(404).json({ error: 'repository_not_found' });
+        }
+
+        const targetFile = path.join(repoPath, pipelineFile);
+        if (!fs.existsSync(targetFile)) {
+            return res.status(404).json({ error: 'pipeline_file_not_found' });
+        }
+
+        let parsed, meta;
+        try {
+            parsed = yaml.load(fs.readFileSync(targetFile, 'utf8'));
+            meta = extractMetadata(parsed);
+        } catch (err) {
+            return res.status(400).json({ error: 'invalid_yaml', details: err.message });
+        }
+
+        const commands = extractCommands(parsed);
+
+        // Pull registered description if any
+        const registered = readJson(PIPELINES_FILE).find(
+            p => p.repoName === repoName && p.pipelineFile === pipelineFile
+        );
+
+        res.json({
+            repoName,
+            pipelineFile,
+            description: registered?.description || meta.description || null,
+            name: registered?.pipelineName || meta.name || pipelineFile,
+            version: meta.version,
+            author: meta.author,
+            commandCount: commands.length,
+            commands,
+            registered: !!registered,
+            registeredAt: registered?.registeredAt || null,
+            registeredBy: registered?.registeredBy || null,
+            rawUrl: `${baseUrl(req)}/raw?repoName=${encodeURIComponent(repoName)}&filePath=${encodeURIComponent(pipelineFile)}`
+        });
+    } catch (err) {
+        console.error('pipelines/info error:', err);
+        res.status(500).json({ error: 'internal_error', details: err.message });
+    }
+});
+
+// Delete a pipeline registration
+app.delete('/api/pipelines/register/:id', authenticateJWT, (req, res) => {
+    let pipelines = readJson(PIPELINES_FILE);
+    const idx = pipelines.findIndex(p => p.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'not_found' });
+    if (pipelines[idx].registeredBy !== req.user.username) {
+        return res.status(403).json({ error: 'access_denied' });
+    }
+    pipelines.splice(idx, 1);
+    writeJson(PIPELINES_FILE, pipelines);
+    res.json({ status: 'success', message: 'Pipeline registration removed' });
 });
 
 // ============ RELEASES ============
@@ -687,7 +1048,7 @@ app.post('/codespaces/exec/:id', authenticateJWT, (req, res) => {
     const cs = readJson(CODESPACES_FILE).find(c => c.id === req.params.id);
     if (!cs) return res.status(404).json({ error: 'Codespace not found' });
     if (cs.createdBy !== req.user.username) return res.status(403).json({ error: 'Access denied' });
-    exec(req.body.command, { cwd: cs.directory }, (error, stdout, stderr) => {
+    exec(req.body.command, { cwd: cs.directory, timeout: 30000 }, (error, stdout, stderr) => {
         res.json({ status: 'executed', command: req.body.command, stdout, stderr, exitCode: error ? error.code : 0 });
     });
 });
@@ -954,7 +1315,7 @@ app.get('/api/auth/me', authenticateJWT, (req, res) => {
     res.json({ authenticated: true, username: req.user.username });
 });
 
-// ============ ⭐ NEW: /api/whoami ============
+// ============ /api/whoami ============
 app.get('/api/whoami', authenticateJWT, (req, res) => {
     res.json({
         username: req.user.username,
@@ -967,87 +1328,53 @@ app.get('/api/whoami', authenticateJWT, (req, res) => {
     });
 });
 
-// ============ ⭐ NEW: /api/oauth/status ============
+// ============ /api/oauth/status ============
 app.get('/api/oauth/status', authenticateJWT, (req, res) => {
     const now = Math.floor(Date.now() / 1000);
     const expiresIn = req.user.exp ? Math.max(0, req.user.exp - now) : null;
     const revoked = req.user.jti ? isTokenRevoked(req.user.jti) : false;
-
-    // Count active OAuth apps owned by this user
     const ownedApps = readJson(APPS_FILE).filter(a => a.created_by === req.user.username).length;
-
     res.json({
-        status: 'active',
-        authenticated: true,
-        user: req.user.username,
-        sub: req.user.sub,
+        status: 'active', authenticated: true,
+        user: req.user.username, sub: req.user.sub,
         token_id: req.user.jti || null,
         client_id: req.user.client_id || null,
         scope: (req.user.scope || 'openid profile email').split(' '),
         expires_in: expiresIn,
         expires_at: req.user.exp ? new Date(req.user.exp * 1000).toISOString() : null,
         issued_at: req.user.iat ? new Date(req.user.iat * 1000).toISOString() : null,
-        revoked: revoked,
-        owned_apps: ownedApps,
+        revoked, owned_apps: ownedApps,
         server_time: new Date().toISOString()
     });
 });
 
-// ============ ⭐ NEW: /api/oauth/userinfo (OIDC-style) ============
-// Supports both:
-//   1. Bearer token in Authorization header (standard OIDC userinfo)
-//   2. ?access_token= query param (per OIDC spec for some clients)
+// ============ /api/oauth/userinfo (OIDC) ============
 app.get('/api/oauth/userinfo', (req, res) => {
     let token = null;
-
-    // Method 1: Authorization header
     const authorization = req.headers.authorization || '';
-    if (authorization.startsWith('Bearer ')) {
-        token = authorization.substring(7);
-    }
-
-    // Method 2: access_token query parameter
-    if (!token && req.query.access_token) {
-        token = req.query.access_token;
-    }
+    if (authorization.startsWith('Bearer ')) token = authorization.substring(7);
+    if (!token && req.query.access_token) token = req.query.access_token;
 
     if (!token) {
         res.setHeader('WWW-Authenticate', 'Bearer realm="userinfo", error="invalid_token"');
-        return res.status(401).json({
-            error: 'invalid_token',
-            error_description: 'Bearer token or access_token query parameter required'
-        });
+        return res.status(401).json({ error: 'invalid_token', error_description: 'Bearer token or access_token query parameter required' });
     }
 
     let decoded;
-    try {
-        decoded = jwt.verify(token, OAUTH_SECRET);
-    } catch (err) {
+    try { decoded = jwt.verify(token, OAUTH_SECRET); }
+    catch (err) {
         res.setHeader('WWW-Authenticate', 'Bearer realm="userinfo", error="invalid_token"');
-        return res.status(401).json({
-            error: 'invalid_token',
-            error_description: 'Token is invalid or expired'
-        });
+        return res.status(401).json({ error: 'invalid_token', error_description: 'Token is invalid or expired' });
     }
 
     if (decoded.jti && isTokenRevoked(decoded.jti)) {
         res.setHeader('WWW-Authenticate', 'Bearer realm="userinfo", error="invalid_token"');
-        return res.status(401).json({
-            error: 'invalid_token',
-            error_description: 'Token has been revoked'
-        });
+        return res.status(401).json({ error: 'invalid_token', error_description: 'Token has been revoked' });
     }
 
-    // Look up the user to return current profile fields
     const user = readJson(USERS_FILE).find(u => u.id === decoded.sub || u.username === decoded.username);
-    if (!user) {
-        return res.status(404).json({
-            error: 'user_not_found',
-            error_description: 'User record no longer exists'
-        });
-    }
+    if (!user) return res.status(404).json({ error: 'user_not_found', error_description: 'User record no longer exists' });
 
-    // OIDC standard claims
     res.json({
         sub: user.id,
         preferred_username: user.username,
@@ -1058,19 +1385,9 @@ app.get('/api/oauth/userinfo', (req, res) => {
         picture: null,
         locale: 'en',
         updated_at: user.createdAt ? Math.floor(new Date(user.createdAt).getTime() / 1000) : undefined,
-        // Extra claims
         client_id: decoded.client_id || null,
         scope: decoded.scope || 'openid profile email'
     });
-});
-
-// Also accept POST per some OIDC implementations
-app.post('/api/oauth/userinfo', (req, res) => {
-    req.query.access_token = req.query.access_token || req.body.access_token;
-    app._router.handle(
-        Object.assign(req, { method: 'GET', url: '/api/oauth/userinfo' + (req.query.access_token ? '?access_token=' + encodeURIComponent(req.query.access_token) : '') }),
-        res, () => {}
-    );
 });
 
 // ============ LOGOUT / HEALTH ============
@@ -1118,7 +1435,6 @@ app.all(/^\/repos\/([^\/]+)\.git(.*)$/, authenticateJWT, (req, res) => {
     backend.on('error', (err) => { if (!res.headersSent) res.status(500).send(`Git Backend Error: ${err.message}`); });
 });
 
-// Static sites
 app.use('/sites/:repoName', optionalAuth, (req, res, next) => {
     const repoPath = path.join(REPO_ROOT, req.params.repoName);
     if (fs.existsSync(repoPath)) express.static(repoPath)(req, res, next);
@@ -1132,7 +1448,6 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'internal_server_error', message: err.message, path: req.path });
 });
 
-// 404 fallback
 app.use((req, res) => {
     res.status(404).json({ error: 'Not Found', message: 'Resource or Site Not Found', path: req.path, method: req.method });
 });
@@ -1144,6 +1459,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`💻 Codespaces:     http://localhost:${PORT}/codespaces/menu`);
     console.log(`📝 Issues:         http://localhost:${PORT}/issues/menu`);
     console.log(`📦 Releases:       http://localhost:${PORT}/releases/menu`);
+    console.log(`⚙️  Pipelines:      http://localhost:${PORT}/pipelines/menu`);
     console.log(`🔐 OAuth Apps:     http://localhost:${PORT}/api/oauth/apps`);
     console.log(`🔑 Login:          http://localhost:${PORT}/api/auth/login`);
     console.log(`👤 Whoami:         http://localhost:${PORT}/api/whoami`);
